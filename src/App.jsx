@@ -14,86 +14,52 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Step 1 — get session immediately on load
+    let resolved = false;
+
+    const finish = (u = null) => {
+      if (resolved) return;
+      resolved = true;
+      if (u) setUser(u);
+      setLoading(false);
+    };
+
+    // Hard timeout — app ALWAYS loads within 3 seconds no matter what
+    const timeout = setTimeout(() => finish(), 3000);
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        loadUserProfile(session.user);
+        supabase.from("users").select("*").eq("id", session.user.id).single()
+          .then(({ data: profile }) => finish(profile || session.user))
+          .catch(() => finish(session.user));
       } else {
-        // No session — stop loading immediately
-        setLoading(false);
+        finish();
       }
-    });
+    }).catch(() => finish());
 
-    // Step 2 — listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session?.user) {
-        loadUserProfile(session.user);
+        supabase.from("users").select("*").eq("id", session.user.id).single()
+          .then(({ data: profile }) => { setUser(profile || session.user); setLoading(false); })
+          .catch(() => { setUser(session.user); setLoading(false); });
       } else if (event === "SIGNED_OUT") {
         setUser(null);
         setLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => { clearTimeout(timeout); subscription.unsubscribe(); };
   }, []);
 
-  const loadUserProfile = async (authUser) => {
-    try {
-      const { data: profile, error } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", authUser.id)
-        .single();
-
-      if (error) throw error;
-      setUser(profile || authUser);
-    } catch {
-      // Profile fetch failed — still set basic user so app doesn't get stuck
-      setUser(authUser);
-    } finally {
-      // Always stop loading — no matter what happens
-      setLoading(false);
-    }
-  };
-
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error("Logout error:", err);
-    } finally {
-      // Always clear user even if signOut fails
-      setUser(null);
-      setLoading(false);
-    }
+    try { await supabase.auth.signOut(); } catch {}
+    setUser(null);
   };
 
-  // Loading screen — only shows briefly on first load
   if (loading) {
     return (
-      <div style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "var(--bg)",
-        flexDirection: "column",
-        gap: 16,
-        fontFamily: "var(--font-body)",
-      }}>
-        <div style={{
-          width: 44, height: 44,
-          background: "var(--primary)",
-          borderRadius: 12,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "var(--font-display)",
-          fontWeight: 700,
-          fontSize: 20,
-          color: "white",
-        }}>K</div>
-        <div style={{ fontSize: 14, color: "var(--muted)" }}>Loading...</div>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", flexDirection: "column", gap: 16 }}>
+        <div style={{ width: 44, height: 44, background: "var(--primary)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 20, color: "white" }}>K</div>
+        <div style={{ fontSize: 14, color: "var(--muted)", fontFamily: "var(--font-body)" }}>Loading...</div>
       </div>
     );
   }
@@ -115,71 +81,31 @@ export default function App() {
   );
 }
 
-// Handles Google OAuth redirect
 function AuthCallback({ onLogin }) {
   const navigate = useNavigate();
-
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user) {
-        // Check if profile exists
-        const { data: profile } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-
+        const { data: profile } = await supabase.from("users").select("*").eq("id", session.user.id).single();
         if (!profile) {
-          // New Google user — create profile
-          await supabase.from("users").upsert([{
-            id: session.user.id,
-            email: session.user.email,
-            full_name: session.user.user_metadata?.full_name || "",
-            user_type: "seeker",
-          }]);
+          await supabase.from("users").upsert([{ id: session.user.id, email: session.user.email, full_name: session.user.user_metadata?.full_name || "", user_type: "seeker" }]);
         }
-
         onLogin?.(profile || session.user);
         navigate("/rooms");
       } else {
         navigate("/login");
       }
-    });
+    }).catch(() => navigate("/login"));
   }, []);
-
-  return (
-    <div style={{
-      minHeight: "100vh",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontFamily: "var(--font-body)",
-    }}>
-      <p style={{ color: "var(--muted)" }}>Signing you in...</p>
-    </div>
-  );
+  return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}><p style={{ color: "var(--muted)" }}>Signing you in...</p></div>;
 }
 
 function NotFound() {
   return (
-    <div style={{
-      minHeight: "calc(100vh - 64px)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexDirection: "column",
-      gap: 12,
-      color: "var(--muted)",
-      fontFamily: "var(--font-body)",
-    }}>
+    <div style={{ minHeight: "calc(100vh - 64px)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
       <div style={{ fontSize: 64 }}>🏠</div>
-      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--secondary)" }}>
-        Page not found
-      </h2>
-      <p>The page you are looking for does not exist.</p>
-      <a href="/" style={{ color: "var(--primary)", fontWeight: 600, fontSize: 14 }}>
-        ← Back to Home
-      </a>
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--secondary)" }}>Page not found</h2>
+      <a href="/" style={{ color: "var(--primary)", fontWeight: 600, fontSize: 14 }}>← Back to Home</a>
     </div>
   );
 }
